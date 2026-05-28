@@ -1,0 +1,8 @@
+opencv-python-headless
+flask
+flask-cors
+mediapipe
+edge-tts
+numpy
+protobuf
+gunicorn
