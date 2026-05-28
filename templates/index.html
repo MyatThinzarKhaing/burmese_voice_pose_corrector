@@ -11,7 +11,7 @@
         :root {
             --bg: #060b13;
             --glass: rgba(255, 255, 255, 0.08);
-            --glass-strong: rgba(255, 255, 255, 0.14);
+            --glass-strong: rgba(255, 255, 255, 0.13);
             --line: rgba(255, 255, 255, 0.17);
             --green: #00ffa3;
             --cyan: #20d8ff;
@@ -25,9 +25,19 @@
             box-sizing: border-box;
         }
 
+        html,
         body {
             margin: 0;
-            min-height: 100vh;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
             background:
                 radial-gradient(circle at 18% 14%, rgba(0, 255, 163, 0.16), transparent 26%),
                 radial-gradient(circle at 82% 18%, rgba(32, 216, 255, 0.14), transparent 28%),
@@ -37,34 +47,32 @@
             letter-spacing: 0;
         }
 
-        .app {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) 390px;
+        .gym-os-container {
+            display: flex;
             gap: 18px;
-            min-height: 100vh;
-            padding: 18px;
+            width: min(96vw, 1320px);
+            height: 90vh;
+            max-height: 700px;
+            box-sizing: border-box;
+            min-height: 0;
         }
 
-        .camera-shell,
-        .dashboard {
+        .stream-viewport {
+            position: relative;
+            flex: 1.4;
+            height: 100%;
+            min-height: 0;
+            overflow: hidden;
             border: 1px solid var(--line);
             border-radius: 8px;
-            background: var(--glass);
+            background: #02050a;
             backdrop-filter: blur(20px);
             box-shadow: 0 28px 90px rgba(0, 0, 0, 0.38);
         }
 
-        .camera-shell {
-            position: relative;
-            overflow: hidden;
-            min-height: calc(100vh - 36px);
-            background: #02050a;
-        }
-
-        #camera {
+        #webcam {
             width: 100%;
             height: 100%;
-            min-height: calc(100vh - 36px);
             display: block;
             object-fit: cover;
             transform: scaleX(-1);
@@ -74,6 +82,38 @@
             display: none;
         }
 
+        .dashboard-sidebar {
+            flex: 0 1 390px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            height: 100%;
+            min-height: 0;
+            box-sizing: border-box;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--glass);
+            backdrop-filter: blur(20px);
+            box-shadow: 0 28px 90px rgba(0, 0, 0, 0.38);
+            padding: clamp(14px, 2.2vh, 22px);
+        }
+
+        .stats-top-block {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .action-hub {
+            flex: 0 0 auto;
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+            padding-top: 12px;
+        }
+
         .hud {
             position: absolute;
             inset: 18px 18px auto 18px;
@@ -81,7 +121,7 @@
             align-items: flex-start;
             justify-content: space-between;
             gap: 12px;
-            z-index: 2;
+            z-index: 3;
         }
 
         .hud-card {
@@ -96,7 +136,7 @@
         .title strong {
             display: block;
             color: var(--green);
-            font-size: 22px;
+            font-size: clamp(18px, 2.2vw, 22px);
             line-height: 1;
             text-shadow: 0 0 18px rgba(0, 255, 163, 0.38);
         }
@@ -137,6 +177,38 @@
             box-shadow: 0 0 22px rgba(255, 77, 109, 0.72);
         }
 
+        .countdown-overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 4;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 8px;
+            background: rgba(6, 11, 19, 0.54);
+            backdrop-filter: blur(12px);
+            text-align: center;
+        }
+
+        .countdown-overlay.show {
+            display: flex;
+        }
+
+        .countdown-overlay strong {
+            color: var(--green);
+            font-size: clamp(90px, 18vw, 180px);
+            line-height: 0.85;
+            text-shadow: 0 0 20px rgba(0, 255, 163, 0.4);
+        }
+
+        .countdown-overlay span {
+            color: #ffffff;
+            font-size: 28px;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+
         .camera-metrics {
             position: absolute;
             left: 18px;
@@ -145,22 +217,22 @@
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 12px;
-            z-index: 2;
+            z-index: 3;
         }
 
         .metric {
-            min-height: 78px;
+            min-height: 70px;
             border: 1px solid var(--line);
             border-radius: 8px;
             background: rgba(6, 11, 19, 0.68);
             backdrop-filter: blur(20px);
-            padding: 13px 14px;
+            padding: 11px 13px;
         }
 
         .metric span {
             display: block;
             color: var(--muted);
-            font-size: 15px;
+            font-size: 14px;
             font-weight: 700;
             line-height: 1;
         }
@@ -168,31 +240,23 @@
         .metric strong {
             display: block;
             margin-top: 8px;
-            font-size: 30px;
+            font-size: 27px;
             line-height: 1;
             color: #ffffff;
         }
 
-        .dashboard {
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            gap: 18px;
-            min-width: 0;
-            padding: 22px;
-        }
-
         .label {
             color: var(--muted);
-            font-size: 18px;
+            font-size: clamp(15px, 2vh, 18px);
             font-weight: 700;
             line-height: 1;
         }
 
         .counter {
-            margin: 12px 0 18px;
+            flex: 0 0 auto;
+            margin: clamp(6px, 1.5vh, 12px) 0 clamp(8px, 2vh, 18px);
             color: var(--green);
-            font-size: clamp(96px, 18vw, 178px);
+            font-size: clamp(76px, 16vh, 150px);
             font-weight: 700;
             line-height: 0.86;
             font-variant-numeric: tabular-nums;
@@ -204,22 +268,23 @@
             animation: bump 360ms ease-out, glow 1.35s ease-in-out infinite;
         }
 
-        .cards {
+        .reading-grid {
+            flex: 0 0 auto;
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 10px;
-            margin-bottom: 18px;
+            margin-bottom: clamp(8px, 2vh, 18px);
         }
 
-        .card {
-            min-height: 76px;
+        .reading-card {
+            min-height: clamp(60px, 10vh, 76px);
             border: 1px solid var(--line);
             border-radius: 8px;
             background: rgba(6, 11, 19, 0.54);
             padding: 12px;
         }
 
-        .card span {
+        .reading-card span {
             display: block;
             color: var(--muted);
             font-size: 14px;
@@ -227,34 +292,36 @@
             line-height: 1;
         }
 
-        .card strong {
+        .reading-card strong {
             display: block;
-            margin-top: 9px;
+            margin-top: 8px;
             color: var(--cyan);
-            font-size: 30px;
+            font-size: clamp(22px, 4.5vh, 30px);
             line-height: 1;
         }
 
         .feedback {
+            flex: 1 1 auto;
             display: flex;
             flex-direction: column;
-            gap: 10px;
-            min-height: 216px;
+            gap: 8px;
+            min-height: 0;
+            overflow: hidden;
             margin-top: 10px;
         }
 
         .pill {
-            min-height: 54px;
+            min-height: 42px;
             display: flex;
             align-items: center;
             border: 1px solid rgba(0, 255, 163, 0.34);
             border-radius: 8px;
             background: rgba(0, 255, 163, 0.13);
             color: #ffffff;
-            font-size: 18px;
+            font-size: clamp(14px, 2vh, 18px);
             font-weight: 700;
             line-height: 1.15;
-            padding: 12px 14px;
+            padding: 10px 12px;
             box-shadow: inset 0 0 22px rgba(0, 255, 163, 0.08);
         }
 
@@ -270,12 +337,6 @@
             box-shadow: inset 0 0 22px rgba(255, 77, 109, 0.1);
         }
 
-        .controls {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 10px;
-        }
-
         .control-row {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -285,11 +346,11 @@
         button {
             display: block;
             width: 100%;
-            min-height: 56px;
+            min-height: clamp(44px, 7.5vh, 56px);
             border: 0;
             border-radius: 8px;
             cursor: pointer;
-            font: 700 18px "Padauk", system-ui, sans-serif;
+            font: 700 clamp(15px, 2.2vh, 18px) "Padauk", system-ui, sans-serif;
             color: #031018;
             background: linear-gradient(135deg, var(--green), var(--cyan));
             box-shadow: 0 18px 40px rgba(0, 255, 163, 0.22);
@@ -347,60 +408,123 @@
             }
         }
 
-        @media (max-width: 940px) {
-            .app {
-                grid-template-columns: 1fr;
-            }
-
-            .camera-shell,
-            #camera {
-                min-height: 58vh;
-            }
-        }
-
-        @media (max-width: 560px) {
-            .app {
-                padding: 10px;
+        @media (max-width: 860px) {
+            .gym-os-container {
+                flex-direction: column;
                 gap: 10px;
+                width: min(96vw, 680px);
+                height: 94vh;
+                max-height: none;
+            }
+
+            .stream-viewport {
+                flex: 1 1 52%;
+            }
+
+            .dashboard-sidebar {
+                flex: 1 1 48%;
+                padding: 12px;
             }
 
             .hud {
                 inset: 10px 10px auto 10px;
-                flex-direction: column;
             }
 
             .camera-metrics {
                 left: 10px;
                 right: 10px;
                 bottom: 10px;
-                grid-template-columns: 1fr;
                 gap: 8px;
             }
 
             .metric {
-                min-height: 58px;
-                padding: 9px 10px;
+                min-height: 54px;
+                padding: 8px 10px;
             }
 
             .metric strong {
-                font-size: 22px;
-            }
-
-            .dashboard {
-                padding: 16px;
+                font-size: 20px;
             }
 
             .counter {
-                font-size: 94px;
+                font-size: clamp(58px, 13vh, 104px);
+            }
+
+            .feedback .pill:nth-child(n+3) {
+                display: none;
+            }
+        }
+
+        @media (max-width: 560px) {
+            .gym-os-container {
+                width: 96vw;
+                height: 96vh;
+                gap: 8px;
+            }
+
+            .stream-viewport {
+                flex-basis: 46%;
+            }
+
+            .dashboard-sidebar {
+                flex-basis: 54%;
+            }
+
+            .hud {
+                flex-direction: column;
+            }
+
+            .hud-card {
+                min-height: 42px;
+                padding: 8px 10px;
+            }
+
+            .title strong {
+                font-size: 17px;
+            }
+
+            .title span,
+            .status span {
+                font-size: 12px;
+            }
+
+            .camera-metrics {
+                grid-template-columns: 1fr;
+            }
+
+            .metric {
+                min-height: 44px;
+            }
+
+            .metric span {
+                font-size: 12px;
+            }
+
+            .metric strong {
+                margin-top: 4px;
+                font-size: 18px;
+            }
+
+            .reading-card {
+                padding: 9px;
+            }
+
+            .control-row {
+                gap: 8px;
             }
         }
     </style>
 </head>
 <body>
-    <main class="app">
-        <section class="camera-shell">
-            <video id="camera" autoplay muted playsinline></video>
+    <main class="gym-os-container">
+        <section class="stream-viewport">
+            <video id="webcam" autoplay muted playsinline></video>
             <canvas id="frameCanvas" width="640" height="480"></canvas>
+
+            <div id="countdownOverlay" class="countdown-overlay">
+                <strong id="countdownNumber">3</strong>
+                <span>ပြင်ဆင်ပါ</span>
+            </div>
 
             <div class="hud">
                 <div class="hud-card title">
@@ -432,17 +556,17 @@
             </div>
         </section>
 
-        <aside class="dashboard">
-            <section>
+        <aside class="dashboard-sidebar">
+            <div class="stats-top-block">
                 <div class="label">စုစုပေါင်း အကြိမ်ရေ</div>
                 <div id="counter" class="counter">0</div>
 
-                <div class="cards">
-                    <div class="card">
+                <div class="reading-grid">
+                    <div class="reading-card">
                         <span>လက်ရှိအဆင့်</span>
                         <strong id="stage">PAUSED</strong>
                     </div>
-                    <div class="card">
+                    <div class="reading-card">
                         <span>ထောင့်</span>
                         <strong><span id="angle">0</span>°</strong>
                     </div>
@@ -452,22 +576,22 @@
                 <div id="feedback" class="feedback">
                     <div class="pill warning">Start ကိုနှိပ်ပြီး လေ့ကျင့်မှုစတင်ပါ</div>
                 </div>
-            </section>
+            </div>
 
-            <section class="controls">
+            <div class="action-hub">
                 <button id="startBtn" type="button">Start / စတင်မည်</button>
                 <div class="control-row">
                     <button id="pauseBtn" class="warning" type="button">Pause / ရပ်မည်</button>
                     <button id="resumeBtn" class="secondary" type="button">Resume / ပြန်စမည်</button>
                 </div>
-            </section>
+            </div>
         </aside>
     </main>
 
     <script>
         const API_BASE = "http://localhost:5000";
 
-        const camera = document.getElementById("camera");
+        const webcam = document.getElementById("webcam");
         const frameCanvas = document.getElementById("frameCanvas");
         const frameContext = frameCanvas.getContext("2d", { willReadFrequently: true });
 
@@ -481,6 +605,8 @@
         const bridgeTextEl = document.getElementById("bridgeText");
         const statusDotEl = document.getElementById("statusDot");
         const feedbackEl = document.getElementById("feedback");
+        const countdownOverlayEl = document.getElementById("countdownOverlay");
+        const countdownNumberEl = document.getElementById("countdownNumber");
 
         const startBtn = document.getElementById("startBtn");
         const pauseBtn = document.getElementById("pauseBtn");
@@ -488,24 +614,31 @@
 
         let lock = false;
         let isActive = false;
+        let isPreparing = false;
+        let isSpeaking = false;
         let streamTimer = null;
         let lastCounter = 0;
+        let lastFeedbackSignature = "";
 
         const feedbackMap = {
             "Good Rep!": {
                 text: "အနေအထား ကောင်းမွန်သည်",
+                voice: "လုပ်တာကောင်းပါတယ်",
                 className: "pill"
             },
             "Keep your body straight": {
                 text: "ကိုယ်ကိုတည့်တည့်ထားပါ",
+                voice: "ကိုယ်ကိုတည့်တည့်ထားပါ",
                 className: "pill warning"
             },
             "Lower your body": {
                 text: "ပိုနိမ့်ပါ",
+                voice: "ပိုနိမ့်ပါ",
                 className: "pill warning"
             },
             "Too low": {
                 text: "အရမ်းမနိမ့်ပါနဲ့",
+                voice: "အရမ်းမနိမ့်ပါနဲ့",
                 className: "pill warning"
             }
         };
@@ -521,6 +654,45 @@
             startBtn.disabled = active;
             pauseBtn.disabled = !active;
             resumeBtn.disabled = active;
+        }
+
+        function playVoiceInstruction(text) {
+            if (isSpeaking || !text) {
+                return;
+            }
+
+            isSpeaking = true;
+            const audio = new Audio(`${API_BASE}/tts?text=${encodeURIComponent(text)}`);
+
+            audio.onended = () => {
+                isSpeaking = false;
+            };
+            audio.onerror = () => {
+                isSpeaking = false;
+            };
+
+            audio.play().catch((error) => {
+                isSpeaking = false;
+                console.error(error);
+            });
+        }
+
+        function speakFeedback(messages) {
+            if (!Array.isArray(messages) || messages.length === 0) {
+                lastFeedbackSignature = "";
+                return;
+            }
+
+            const signature = messages.join("|");
+            if (signature === lastFeedbackSignature) {
+                return;
+            }
+
+            lastFeedbackSignature = signature;
+            const firstMapped = messages.map((message) => feedbackMap[message]).find(Boolean);
+            if (firstMapped) {
+                playVoiceInstruction(firstMapped.voice);
+            }
         }
 
         function renderFeedback(messages) {
@@ -546,17 +718,13 @@
             const nextCounter = Number(data.counter || 0);
             const nextAngle = Number(data.angle || 0);
             const nextStage = String(data.stage || "paused").toUpperCase();
+            const feedback = Array.isArray(data.feedback) ? data.feedback : [];
 
             counterEl.textContent = nextCounter;
             stageEl.textContent = nextStage;
             angleEl.textContent = nextAngle;
             cameraAngleEl.textContent = nextAngle;
-
-            if (!isActive) {
-                cameraStatusEl.textContent = "PAUSED";
-            } else {
-                cameraStatusEl.textContent = "ACTIVE";
-            }
+            cameraStatusEl.textContent = (isActive || isPreparing) ? "ACTIVE" : "PAUSED";
 
             if (nextCounter > lastCounter) {
                 counterEl.classList.remove("bump");
@@ -565,11 +733,12 @@
             }
 
             lastCounter = nextCounter;
-            renderFeedback(Array.isArray(data.feedback) ? data.feedback : []);
+            renderFeedback(feedback);
+            speakFeedback(feedback);
         }
 
         async function ensureCamera() {
-            if (camera.srcObject) {
+            if (webcam.srcObject) {
                 return;
             }
 
@@ -582,8 +751,27 @@
                 audio: false
             });
 
-            camera.srcObject = stream;
-            await camera.play();
+            webcam.srcObject = stream;
+            await webcam.play();
+        }
+
+        function sleep(ms) {
+            return new Promise((resolve) => window.setTimeout(resolve, ms));
+        }
+
+        async function triggerCountdownSequence() {
+            isPreparing = true;
+            countdownOverlayEl.classList.add("show");
+
+            for (let value = 3; value >= 1; value -= 1) {
+                countdownNumberEl.textContent = value;
+                await sleep(1000);
+            }
+
+            countdownNumberEl.textContent = "GO";
+            await sleep(350);
+            countdownOverlayEl.classList.remove("show");
+            isPreparing = false;
         }
 
         function canvasToBlob(canvas, type, quality) {
@@ -593,14 +781,14 @@
         }
 
         async function streamInferencePipeline() {
-            if (!isActive || lock || camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            if (!isActive || isPreparing || lock || webcam.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
                 return;
             }
 
-            frameContext.drawImage(camera, 0, 0, 640, 480);
+            frameContext.drawImage(webcam, 0, 0, 640, 480);
             const blob = await canvasToBlob(frameCanvas, "image/jpeg", 0.5);
 
-            if (!blob || !isActive || lock) {
+            if (!blob || !isActive || isPreparing || lock) {
                 return;
             }
 
@@ -655,15 +843,24 @@
             try {
                 await ensureCamera();
                 await postControl("/start");
-                isActive = true;
+                isActive = false;
+                isPreparing = true;
                 lock = false;
                 lastCounter = 0;
+                lastFeedbackSignature = "";
                 setUiState("Active");
-                bridgeTextEl.textContent = "Tracking started";
+                bridgeTextEl.textContent = "Preparing";
                 networkStateEl.textContent = "READY";
                 updateMetrics({ counter: 0, angle: 0, stage: "up", feedback: [] });
                 startLoop();
+                await triggerCountdownSequence();
+                isActive = true;
+                bridgeTextEl.textContent = "Tracking started";
             } catch (error) {
+                isActive = false;
+                isPreparing = false;
+                countdownOverlayEl.classList.remove("show");
+                setUiState("Paused");
                 bridgeTextEl.textContent = "Start failed";
                 renderFeedback(["ကင်မရာ သို့မဟုတ် backend ချိတ်ဆက်မှုကို စစ်ဆေးပါ"]);
                 console.error(error);
@@ -674,6 +871,8 @@
             try {
                 await postControl("/pause");
                 isActive = false;
+                isPreparing = false;
+                countdownOverlayEl.classList.remove("show");
                 setUiState("Paused");
                 bridgeTextEl.textContent = "Tracking paused";
                 networkStateEl.textContent = "IDLE";
@@ -688,13 +887,22 @@
             try {
                 await ensureCamera();
                 await postControl("/resume");
-                isActive = true;
+                isActive = false;
+                isPreparing = true;
                 lock = false;
+                lastFeedbackSignature = "";
                 setUiState("Active");
-                bridgeTextEl.textContent = "Tracking resumed";
+                bridgeTextEl.textContent = "Preparing";
                 networkStateEl.textContent = "READY";
                 startLoop();
+                await triggerCountdownSequence();
+                isActive = true;
+                bridgeTextEl.textContent = "Tracking resumed";
             } catch (error) {
+                isActive = false;
+                isPreparing = false;
+                countdownOverlayEl.classList.remove("show");
+                setUiState("Paused");
                 bridgeTextEl.textContent = "Resume failed";
                 renderFeedback(["ကင်မရာ သို့မဟုတ် backend ချိတ်ဆက်မှုကို စစ်ဆေးပါ"]);
                 console.error(error);

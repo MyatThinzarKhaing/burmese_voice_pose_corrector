@@ -1,11 +1,11 @@
 import asyncio
+import base64
+import binascii
 import math
 import os
-import queue
+import re
 import sys
-import tempfile
 import threading
-import time
 import types
 
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
@@ -15,8 +15,7 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 import cv2
 import edge_tts
 import numpy as np
-import pygame
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 from flask_cors import CORS
 from google.protobuf import descriptor as protobuf_descriptor
 from google.protobuf import message_factory
@@ -69,6 +68,9 @@ CORS(app)
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 
 mp_pose = mp.solutions.pose
+pose_lock = threading.Lock()
+state_lock = threading.Lock()
+
 pose = mp_pose.Pose(
     static_image_mode=False,
     model_complexity=1,
@@ -78,170 +80,199 @@ pose = mp_pose.Pose(
     min_tracking_confidence=0.5,
 )
 
-state_lock = threading.RLock()
-pose_lock = threading.Lock()
-audio_queue = queue.Queue(maxsize=2)
+BURMESE_VOICE = "my-MM-NilarNeural"
+
+DOWN_ANGLE_THRESHOLD = 115
+UP_ANGLE_THRESHOLD = 140
+TOO_LOW_ANGLE_THRESHOLD = 45
 
 counter = 0
-stage = "paused"
-angle = 0
-is_paused = True
-last_spoken_at = {}
-
-BURMESE_VOICE = "my-MM-NilarNeural"
-VOICE_TEXT = {
-    "Good Rep!": "အနေအထား ကောင်းမွန်သည်",
-    "Keep your body straight": "ကိုယ်ကိုတည့်တည့်ထားပါ",
-    "Lower your body": "ပိုနိမ့်ပါ",
-    "Too low": "အရမ်းမနိမ့်ပါနဲ့",
-}
-
-
-def make_payload(feedback=None):
-    with state_lock:
-        return {
-            "counter": int(counter),
-            "angle": int(angle),
-            "stage": stage,
-            "feedback": feedback or [],
-            "paused": bool(is_paused),
-        }
+stage = "up"
+last_angle = 0
+tracking_active = False
+last_feedback_spoken = {}
 
 
 def calculate_angle(a, b, c):
-    x1, y1 = a[:2]
-    x2, y2 = b[:2]
-    x3, y3 = c[:2]
-    raw_angle = math.degrees(
-        math.atan2(y3 - y2, x3 - x2) - math.atan2(y1 - y2, x1 - x2)
-    )
+    ax, ay = a[:2]
+    bx, by = b[:2]
+    cx, cy = c[:2]
 
-    raw_angle = abs(raw_angle)
-    if raw_angle > 180:
-        raw_angle = 360 - raw_angle
+    ba = (ax - bx, ay - by)
+    bc = (cx - bx, cy - by)
+    ba_length = math.hypot(*ba)
+    bc_length = math.hypot(*bc)
 
-    return raw_angle
+    if ba_length == 0 or bc_length == 0:
+        return 0.0
 
-
-def init_audio():
-    try:
-        if not pygame.mixer.get_init():
-            pygame.mixer.init()
-        return True
-    except pygame.error as exc:
-        print(f"Audio disabled: {exc}")
-        return False
+    cosine = ((ba[0] * bc[0]) + (ba[1] * bc[1])) / (ba_length * bc_length)
+    cosine = max(-1.0, min(1.0, cosine))
+    return math.degrees(math.acos(cosine))
 
 
-AUDIO_READY = init_audio()
+def point_distance(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
-async def speak_async(text):
-    if not AUDIO_READY:
-        return
+def distance_from_line(point, line_start, line_end):
+    x0, y0 = point[:2]
+    x1, y1 = line_start[:2]
+    x2, y2 = line_end[:2]
 
-    fd, filename = tempfile.mkstemp(suffix=".mp3")
-    os.close(fd)
+    line_length = math.hypot(x2 - x1, y2 - y1)
+    if line_length == 0:
+        return 0.0
 
-    try:
-        communicate = edge_tts.Communicate(text=text, voice=BURMESE_VOICE)
-        await communicate.save(filename)
-        pygame.mixer.music.load(filename)
-        pygame.mixer.music.play()
-
-        while pygame.mixer.music.get_busy():
-            await asyncio.sleep(0.05)
-
-        pygame.mixer.music.stop()
-        pygame.mixer.music.unload()
-        await asyncio.sleep(0.1)
-    except Exception as exc:
-        print(f"TTS skipped: {exc}")
-    finally:
-        try:
-            if os.path.exists(filename):
-                os.remove(filename)
-        except OSError:
-            pass
+    return abs((y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1) / line_length
 
 
-def audio_worker():
-    while True:
-        text = audio_queue.get()
-        try:
-            asyncio.run(speak_async(text))
-        finally:
-            audio_queue.task_done()
+def current_snapshot(feedback=None):
+    return {
+        "counter": int(counter),
+        "angle": int(last_angle),
+        "stage": stage,
+        "feedback": feedback or [],
+    }
 
 
-def queue_voice(feedback_key, cooldown=3.0):
-    now = time.time()
-    with state_lock:
-        previous = last_spoken_at.get(feedback_key, 0)
-        if now - previous < cooldown:
-            return
-        last_spoken_at[feedback_key] = now
-
-    try:
-        audio_queue.put_nowait(VOICE_TEXT[feedback_key])
-    except queue.Full:
-        pass
-
-
-def extract_landmarks(results, width, height):
+def landmarks_from_results(results, width, height):
     if not results.pose_landmarks:
         return []
 
     return [
-        (int(landmark.x * width), int(landmark.y * height), landmark.z)
-        for landmark in results.pose_landmarks.landmark
+        (int(lm.x * width), int(lm.y * height), lm.z, lm.visibility)
+        for lm in results.pose_landmarks.landmark
     ]
 
 
-def evaluate_pushup(landmarks):
-    global angle, counter, stage
+def is_arm_visible(landmarks):
+    required = (
+        mp_pose.PoseLandmark.LEFT_SHOULDER.value,
+        mp_pose.PoseLandmark.LEFT_ELBOW.value,
+        mp_pose.PoseLandmark.LEFT_WRIST.value,
+    )
+    return all(landmarks[index][3] >= 0.45 for index in required)
 
-    feedback = []
-    voice_events = []
 
-    shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
-    elbow = landmarks[mp_pose.PoseLandmark.LEFT_ELBOW.value]
-    wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST.value]
-    hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP.value]
-    ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value]
+def is_body_visible(landmarks):
+    required = (
+        mp_pose.PoseLandmark.LEFT_HIP.value,
+        mp_pose.PoseLandmark.LEFT_ANKLE.value,
+    )
+    return all(landmarks[index][3] >= 0.45 for index in required)
 
-    current_angle = int(calculate_angle(shoulder, elbow, wrist))
-    body_alignment = abs(((shoulder[1] + ankle[1]) / 2) - hip[1])
+
+def is_horizontal_pushup_position(shoulder, hip, ankle):
+    body_length = max(point_distance(shoulder, ankle), 1.0)
+    shoulder_hip_gap = abs(shoulder[1] - hip[1])
+    hip_ankle_gap = abs(hip[1] - ankle[1])
+
+    shoulder_hip_aligned = shoulder_hip_gap <= body_length * 0.22
+    hip_ankle_not_standing = hip_ankle_gap <= body_length * 0.32
+    body_has_horizontal_span = abs(shoulder[0] - ankle[0]) >= body_length * 0.45
+
+    return shoulder_hip_aligned and hip_ankle_not_standing and body_has_horizontal_span
+
+
+def body_alignment_feedback(shoulder, hip, ankle):
+    body_length = max(point_distance(shoulder, ankle), 1.0)
+    hip_line_distance = distance_from_line(hip, shoulder, ankle)
+    return hip_line_distance > body_length * 0.12
+
+
+def detect_pushup(landmarks):
+    global counter, stage, last_angle
 
     with state_lock:
-        angle = current_angle
+        if not is_arm_visible(landmarks):
+            return current_snapshot([])
 
-        if current_angle < 95:
+        shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+        elbow = landmarks[mp_pose.PoseLandmark.LEFT_ELBOW.value]
+        wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST.value]
+        angle = calculate_angle(shoulder, elbow, wrist)
+        last_angle = int(angle)
+
+        feedback = []
+
+        if is_body_visible(landmarks):
+            hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP.value]
+            ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value]
+            horizontal_position = is_horizontal_pushup_position(shoulder, hip, ankle)
+            alignment_problem = body_alignment_feedback(shoulder, hip, ankle)
+
+            if not horizontal_position or alignment_problem:
+                feedback.append("Keep your body straight")
+
+        if angle < TOO_LOW_ANGLE_THRESHOLD:
+            feedback.append("Too low")
+
+        if angle < DOWN_ANGLE_THRESHOLD:
             stage = "down"
 
-        if current_angle > 155 and stage == "down":
+        if angle > UP_ANGLE_THRESHOLD and stage == "down":
             stage = "up"
             counter += 1
             feedback.append("Good Rep!")
-            voice_events.append(("Good Rep!", 1.8))
 
-        if body_alignment > 44:
-            feedback.append("Keep your body straight")
-            voice_events.append(("Keep your body straight", 3.5))
+        return current_snapshot(feedback)
 
-        if current_angle > 168 and stage == "up":
-            feedback.append("Lower your body")
-            voice_events.append(("Lower your body", 3.0))
-        elif current_angle < 55:
-            feedback.append("Too low")
-            voice_events.append(("Too low", 3.0))
 
-        payload = make_payload(feedback)
+def decode_frame_from_request():
+    uploaded_frame = request.files.get("frame")
+    if uploaded_frame is not None:
+        return uploaded_frame.read()
 
-    for key, cooldown in voice_events:
-        queue_voice(key, cooldown=cooldown)
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+        encoded = payload.get("frame") or payload.get("image") or payload.get("data")
+        if not encoded:
+            return None
 
-    return payload
+        if isinstance(encoded, str):
+            encoded = re.sub(r"^data:image/[^;]+;base64,", "", encoded)
+            try:
+                return base64.b64decode(encoded, validate=True)
+            except binascii.Error:
+                return None
+
+        return None
+
+    if request.data:
+        return request.data
+
+    return None
+
+
+def decode_jpeg_frame(frame_bytes):
+    if not frame_bytes:
+        return None
+
+    frame_array = np.frombuffer(frame_bytes, np.uint8)
+    return cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+
+
+async def tts_chunk_generator(text):
+    communicate = edge_tts.Communicate(text=text, voice=BURMESE_VOICE)
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            yield chunk["data"]
+
+
+def stream_tts_audio(text):
+    loop = asyncio.new_event_loop()
+    generator = tts_chunk_generator(text)
+
+    try:
+        while True:
+            try:
+                yield loop.run_until_complete(generator.__anext__())
+            except StopAsyncIteration:
+                break
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
 
 
 @app.route("/")
@@ -250,80 +281,82 @@ def index():
 
 
 @app.route("/start", methods=["POST"])
-def start():
-    global angle, counter, is_paused, stage
+def start_tracking():
+    global counter, stage, last_angle, tracking_active, last_feedback_spoken
 
     with state_lock:
         counter = 0
-        angle = 0
         stage = "up"
-        is_paused = False
-        last_spoken_at.clear()
+        last_angle = 0
+        tracking_active = True
+        last_feedback_spoken = {}
 
-    return jsonify({"status": "started"})
+    return jsonify(current_snapshot())
 
 
 @app.route("/pause", methods=["POST"])
-def pause():
-    global is_paused, stage
+def pause_tracking():
+    global tracking_active
 
     with state_lock:
-        is_paused = True
-        stage = "paused"
+        tracking_active = False
+        snapshot = current_snapshot()
 
-    return jsonify({"status": "paused"})
+    return jsonify(snapshot)
 
 
 @app.route("/resume", methods=["POST"])
-def resume():
-    global is_paused, stage
+def resume_tracking():
+    global tracking_active
 
     with state_lock:
-        is_paused = False
-        if stage == "paused":
-            stage = "up"
+        tracking_active = True
+        snapshot = current_snapshot()
 
-    return jsonify({"status": "resumed"})
+    return jsonify(snapshot)
+
+
+@app.route("/tts", methods=["GET"])
+def tts():
+    text = request.args.get("text", "").strip()
+    if not text:
+        return jsonify({"error": "Missing text query parameter"}), 400
+
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+    }
+    return Response(
+        stream_with_context(stream_tts_audio(text)),
+        headers=headers,
+        mimetype="audio/mpeg",
+        direct_passthrough=True,
+    )
 
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    with state_lock:
-        paused_now = is_paused
-
-    if paused_now:
-        return jsonify(make_payload())
-
-    uploaded_frame = request.files.get("frame")
-    if uploaded_frame is None:
-        return jsonify({"error": "Missing form-data file field: frame", **make_payload()}), 400
-
-    frame_data = np.frombuffer(uploaded_frame.read(), dtype=np.uint8)
-    frame = cv2.imdecode(frame_data, cv2.IMREAD_COLOR)
+    frame_bytes = decode_frame_from_request()
+    frame = decode_jpeg_frame(frame_bytes)
 
     if frame is None:
-        return jsonify({"error": "Unable to decode image frame", **make_payload()}), 400
+        return jsonify({"error": "Unable to decode image frame"}), 400
 
-    frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_AREA)
     frame = cv2.flip(frame, 1)
     height, width = frame.shape[:2]
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    rgb_frame.flags.writeable = False
 
-    try:
-        with pose_lock:
-            results = pose.process(rgb_frame)
-    except Exception as exc:
-        print(f"MediaPipe processing error: {exc}")
-        return jsonify({"error": "Pose processing failed", **make_payload()}), 500
+    with pose_lock:
+        results = pose.process(rgb_frame)
 
-    landmarks = extract_landmarks(results, width, height)
+    landmarks = landmarks_from_results(results, width, height)
+
     if not landmarks:
-        return jsonify(make_payload())
+        with state_lock:
+            return jsonify(current_snapshot())
 
-    return jsonify(evaluate_pushup(landmarks))
+    return jsonify(detect_pushup(landmarks))
 
 
 if __name__ == "__main__":
-    threading.Thread(target=audio_worker, daemon=True).start()
     app.run(host="127.0.0.1", port=5000, debug=True, threaded=True, use_reloader=False)
