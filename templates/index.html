@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>မြန်မာ AI Push-Up Trainer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Padauk:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #060b13;
+            --glass: rgba(255, 255, 255, 0.08);
+            --glass-strong: rgba(255, 255, 255, 0.14);
+            --line: rgba(255, 255, 255, 0.17);
+            --green: #00ffa3;
+            --cyan: #20d8ff;
+            --amber: #ffb020;
+            --red: #ff4d6d;
+            --text: #f6fbff;
+            --muted: #8da0b8;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background:
+                radial-gradient(circle at 18% 14%, rgba(0, 255, 163, 0.16), transparent 26%),
+                radial-gradient(circle at 82% 18%, rgba(32, 216, 255, 0.14), transparent 28%),
+                linear-gradient(135deg, #060b13 0%, #0a1322 52%, #04070d 100%);
+            color: var(--text);
+            font-family: "Padauk", system-ui, sans-serif;
+            letter-spacing: 0;
+        }
+
+        .app {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 390px;
+            gap: 18px;
+            min-height: 100vh;
+            padding: 18px;
+        }
+
+        .camera-shell,
+        .dashboard {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--glass);
+            backdrop-filter: blur(20px);
+            box-shadow: 0 28px 90px rgba(0, 0, 0, 0.38);
+        }
+
+        .camera-shell {
+            position: relative;
+            overflow: hidden;
+            min-height: calc(100vh - 36px);
+            background: #02050a;
+        }
+
+        #camera {
+            width: 100%;
+            height: 100%;
+            min-height: calc(100vh - 36px);
+            display: block;
+            object-fit: cover;
+            transform: scaleX(-1);
+        }
+
+        #frameCanvas {
+            display: none;
+        }
+
+        .hud {
+            position: absolute;
+            inset: 18px 18px auto 18px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            z-index: 2;
+        }
+
+        .hud-card {
+            min-height: 54px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(6, 11, 19, 0.68);
+            backdrop-filter: blur(20px);
+            padding: 10px 14px;
+        }
+
+        .title strong {
+            display: block;
+            color: var(--green);
+            font-size: 22px;
+            line-height: 1;
+            text-shadow: 0 0 18px rgba(0, 255, 163, 0.38);
+        }
+
+        .title span,
+        .status span {
+            display: block;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.2;
+            margin-top: 4px;
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 170px;
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            flex: 0 0 auto;
+            border-radius: 50%;
+            background: var(--amber);
+            box-shadow: 0 0 22px rgba(255, 176, 32, 0.65);
+        }
+
+        .dot.active {
+            background: var(--green);
+            box-shadow: 0 0 22px rgba(0, 255, 163, 0.8);
+            animation: pulse 1.1s ease-in-out infinite;
+        }
+
+        .dot.paused {
+            background: var(--red);
+            box-shadow: 0 0 22px rgba(255, 77, 109, 0.72);
+        }
+
+        .camera-metrics {
+            position: absolute;
+            left: 18px;
+            right: 18px;
+            bottom: 18px;
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+            z-index: 2;
+        }
+
+        .metric {
+            min-height: 78px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(6, 11, 19, 0.68);
+            backdrop-filter: blur(20px);
+            padding: 13px 14px;
+        }
+
+        .metric span {
+            display: block;
+            color: var(--muted);
+            font-size: 15px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .metric strong {
+            display: block;
+            margin-top: 8px;
+            font-size: 30px;
+            line-height: 1;
+            color: #ffffff;
+        }
+
+        .dashboard {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            gap: 18px;
+            min-width: 0;
+            padding: 22px;
+        }
+
+        .label {
+            color: var(--muted);
+            font-size: 18px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .counter {
+            margin: 12px 0 18px;
+            color: var(--green);
+            font-size: clamp(96px, 18vw, 178px);
+            font-weight: 700;
+            line-height: 0.86;
+            font-variant-numeric: tabular-nums;
+            text-shadow: 0 0 20px rgba(0, 255, 163, 0.4);
+            animation: glow 1.35s ease-in-out infinite;
+        }
+
+        .counter.bump {
+            animation: bump 360ms ease-out, glow 1.35s ease-in-out infinite;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 18px;
+        }
+
+        .card {
+            min-height: 76px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(6, 11, 19, 0.54);
+            padding: 12px;
+        }
+
+        .card span {
+            display: block;
+            color: var(--muted);
+            font-size: 14px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .card strong {
+            display: block;
+            margin-top: 9px;
+            color: var(--cyan);
+            font-size: 30px;
+            line-height: 1;
+        }
+
+        .feedback {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 216px;
+            margin-top: 10px;
+        }
+
+        .pill {
+            min-height: 54px;
+            display: flex;
+            align-items: center;
+            border: 1px solid rgba(0, 255, 163, 0.34);
+            border-radius: 8px;
+            background: rgba(0, 255, 163, 0.13);
+            color: #ffffff;
+            font-size: 18px;
+            font-weight: 700;
+            line-height: 1.15;
+            padding: 12px 14px;
+            box-shadow: inset 0 0 22px rgba(0, 255, 163, 0.08);
+        }
+
+        .pill.warning {
+            border-color: rgba(255, 176, 32, 0.44);
+            background: rgba(255, 176, 32, 0.15);
+            box-shadow: inset 0 0 22px rgba(255, 176, 32, 0.1);
+        }
+
+        .pill.danger {
+            border-color: rgba(255, 77, 109, 0.46);
+            background: rgba(255, 77, 109, 0.16);
+            box-shadow: inset 0 0 22px rgba(255, 77, 109, 0.1);
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .control-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        button {
+            display: block;
+            width: 100%;
+            min-height: 56px;
+            border: 0;
+            border-radius: 8px;
+            cursor: pointer;
+            font: 700 18px "Padauk", system-ui, sans-serif;
+            color: #031018;
+            background: linear-gradient(135deg, var(--green), var(--cyan));
+            box-shadow: 0 18px 40px rgba(0, 255, 163, 0.22);
+        }
+
+        button.secondary {
+            color: var(--text);
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.11);
+            box-shadow: none;
+        }
+
+        button.warning {
+            color: #140b00;
+            background: linear-gradient(135deg, var(--amber), #ffd36e);
+            box-shadow: 0 18px 40px rgba(255, 176, 32, 0.18);
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.52;
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.35);
+            }
+        }
+
+        @keyframes glow {
+            0%, 100% {
+                filter: brightness(1);
+            }
+            50% {
+                filter: brightness(1.23);
+            }
+        }
+
+        @keyframes bump {
+            0% {
+                transform: scale(1);
+            }
+            42% {
+                transform: scale(1.08);
+            }
+            100% {
+                transform: scale(1);
+            }
+        }
+
+        @media (max-width: 940px) {
+            .app {
+                grid-template-columns: 1fr;
+            }
+
+            .camera-shell,
+            #camera {
+                min-height: 58vh;
+            }
+        }
+
+        @media (max-width: 560px) {
+            .app {
+                padding: 10px;
+                gap: 10px;
+            }
+
+            .hud {
+                inset: 10px 10px auto 10px;
+                flex-direction: column;
+            }
+
+            .camera-metrics {
+                left: 10px;
+                right: 10px;
+                bottom: 10px;
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+
+            .metric {
+                min-height: 58px;
+                padding: 9px 10px;
+            }
+
+            .metric strong {
+                font-size: 22px;
+            }
+
+            .dashboard {
+                padding: 16px;
+            }
+
+            .counter {
+                font-size: 94px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="app">
+        <section class="camera-shell">
+            <video id="camera" autoplay muted playsinline></video>
+            <canvas id="frameCanvas" width="640" height="480"></canvas>
+
+            <div class="hud">
+                <div class="hud-card title">
+                    <strong>မြန်မာ AI Push-Up Trainer</strong>
+                    <span>တိုက်ရိုက် ခန္ဓာကိုယ်ပုံစံ စစ်ဆေးမှု</span>
+                </div>
+                <div class="hud-card status">
+                    <i id="statusDot" class="dot paused"></i>
+                    <div>
+                        <strong id="statusText">Paused</strong>
+                        <span id="bridgeText">Server bridge ready</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="camera-metrics">
+                <div class="metric">
+                    <span>စနစ်အခြေအနေ</span>
+                    <strong id="cameraStatus">PAUSED</strong>
+                </div>
+                <div class="metric">
+                    <span>တံတောင်ထောင့်</span>
+                    <strong><span id="cameraAngle">0</span>°</strong>
+                </div>
+                <div class="metric">
+                    <span>ပေးပို့မှု</span>
+                    <strong id="networkState">IDLE</strong>
+                </div>
+            </div>
+        </section>
+
+        <aside class="dashboard">
+            <section>
+                <div class="label">စုစုပေါင်း အကြိမ်ရေ</div>
+                <div id="counter" class="counter">0</div>
+
+                <div class="cards">
+                    <div class="card">
+                        <span>လက်ရှိအဆင့်</span>
+                        <strong id="stage">PAUSED</strong>
+                    </div>
+                    <div class="card">
+                        <span>ထောင့်</span>
+                        <strong><span id="angle">0</span>°</strong>
+                    </div>
+                </div>
+
+                <div class="label">တိုက်ရိုက် အကြံပြုချက်</div>
+                <div id="feedback" class="feedback">
+                    <div class="pill warning">Start ကိုနှိပ်ပြီး လေ့ကျင့်မှုစတင်ပါ</div>
+                </div>
+            </section>
+
+            <section class="controls">
+                <button id="startBtn" type="button">Start / စတင်မည်</button>
+                <div class="control-row">
+                    <button id="pauseBtn" class="warning" type="button">Pause / ရပ်မည်</button>
+                    <button id="resumeBtn" class="secondary" type="button">Resume / ပြန်စမည်</button>
+                </div>
+            </section>
+        </aside>
+    </main>
+
+    <script>
+        const API_BASE = "http://localhost:5000";
+
+        const camera = document.getElementById("camera");
+        const frameCanvas = document.getElementById("frameCanvas");
+        const frameContext = frameCanvas.getContext("2d", { willReadFrequently: true });
+
+        const counterEl = document.getElementById("counter");
+        const stageEl = document.getElementById("stage");
+        const angleEl = document.getElementById("angle");
+        const cameraStatusEl = document.getElementById("cameraStatus");
+        const cameraAngleEl = document.getElementById("cameraAngle");
+        const networkStateEl = document.getElementById("networkState");
+        const statusTextEl = document.getElementById("statusText");
+        const bridgeTextEl = document.getElementById("bridgeText");
+        const statusDotEl = document.getElementById("statusDot");
+        const feedbackEl = document.getElementById("feedback");
+
+        const startBtn = document.getElementById("startBtn");
+        const pauseBtn = document.getElementById("pauseBtn");
+        const resumeBtn = document.getElementById("resumeBtn");
+
+        let lock = false;
+        let isActive = false;
+        let streamTimer = null;
+        let lastCounter = 0;
+
+        const feedbackMap = {
+            "Good Rep!": {
+                text: "အနေအထား ကောင်းမွန်သည်",
+                className: "pill"
+            },
+            "Keep your body straight": {
+                text: "ကိုယ်ကိုတည့်တည့်ထားပါ",
+                className: "pill warning"
+            },
+            "Lower your body": {
+                text: "ပိုနိမ့်ပါ",
+                className: "pill warning"
+            },
+            "Too low": {
+                text: "အရမ်းမနိမ့်ပါနဲ့",
+                className: "pill warning"
+            }
+        };
+
+        function setUiState(nextState) {
+            const active = nextState === "Active";
+            const paused = nextState === "Paused";
+
+            statusTextEl.textContent = nextState;
+            cameraStatusEl.textContent = nextState.toUpperCase();
+            statusDotEl.className = active ? "dot active" : paused ? "dot paused" : "dot";
+
+            startBtn.disabled = active;
+            pauseBtn.disabled = !active;
+            resumeBtn.disabled = active;
+        }
+
+        function renderFeedback(messages) {
+            feedbackEl.innerHTML = "";
+
+            const list = messages.length > 0
+                ? messages
+                : [isActive ? "ဆက်လုပ်ပါ။ ပုံစံကိုထိန်းထားပါ" : "Start သို့မဟုတ် Resume ကိုနှိပ်ပါ"];
+
+            list.forEach((message) => {
+                const mapped = feedbackMap[message] || {
+                    text: message,
+                    className: isActive ? "pill" : "pill warning"
+                };
+                const pill = document.createElement("div");
+                pill.className = mapped.className;
+                pill.textContent = mapped.text;
+                feedbackEl.appendChild(pill);
+            });
+        }
+
+        function updateMetrics(data) {
+            const nextCounter = Number(data.counter || 0);
+            const nextAngle = Number(data.angle || 0);
+            const nextStage = String(data.stage || "paused").toUpperCase();
+
+            counterEl.textContent = nextCounter;
+            stageEl.textContent = nextStage;
+            angleEl.textContent = nextAngle;
+            cameraAngleEl.textContent = nextAngle;
+
+            if (!isActive) {
+                cameraStatusEl.textContent = "PAUSED";
+            } else {
+                cameraStatusEl.textContent = "ACTIVE";
+            }
+
+            if (nextCounter > lastCounter) {
+                counterEl.classList.remove("bump");
+                void counterEl.offsetWidth;
+                counterEl.classList.add("bump");
+            }
+
+            lastCounter = nextCounter;
+            renderFeedback(Array.isArray(data.feedback) ? data.feedback : []);
+        }
+
+        async function ensureCamera() {
+            if (camera.srcObject) {
+                return;
+            }
+
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    width: { ideal: 640 },
+                    height: { ideal: 480 },
+                    facingMode: "user"
+                },
+                audio: false
+            });
+
+            camera.srcObject = stream;
+            await camera.play();
+        }
+
+        function canvasToBlob(canvas, type, quality) {
+            return new Promise((resolve) => {
+                canvas.toBlob(resolve, type, quality);
+            });
+        }
+
+        async function streamInferencePipeline() {
+            if (!isActive || lock || camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+                return;
+            }
+
+            frameContext.drawImage(camera, 0, 0, 640, 480);
+            const blob = await canvasToBlob(frameCanvas, "image/jpeg", 0.5);
+
+            if (!blob || !isActive || lock) {
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("frame", blob, "frame.jpg");
+
+            networkStateEl.textContent = "SEND";
+
+            try {
+                lock = true;
+                const response = await fetch(`${API_BASE}/analyze`, {
+                    method: "POST",
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Analyze failed: ${response.status}`);
+                }
+
+                const data = await response.json();
+                bridgeTextEl.textContent = "Backend connected";
+                networkStateEl.textContent = "OK";
+                updateMetrics(data);
+            } catch (error) {
+                bridgeTextEl.textContent = "Backend connection failed";
+                networkStateEl.textContent = "ERR";
+                console.error(error);
+            } finally {
+                lock = false;
+            }
+        }
+
+        function startLoop() {
+            if (!streamTimer) {
+                streamTimer = window.setInterval(streamInferencePipeline, 75);
+            }
+        }
+
+        async function postControl(path) {
+            const response = await fetch(`${API_BASE}${path}`, {
+                method: "POST"
+            });
+
+            if (!response.ok) {
+                throw new Error(`Control route failed: ${path}`);
+            }
+
+            return response.json();
+        }
+
+        async function startTracking() {
+            try {
+                await ensureCamera();
+                await postControl("/start");
+                isActive = true;
+                lock = false;
+                lastCounter = 0;
+                setUiState("Active");
+                bridgeTextEl.textContent = "Tracking started";
+                networkStateEl.textContent = "READY";
+                updateMetrics({ counter: 0, angle: 0, stage: "up", feedback: [] });
+                startLoop();
+            } catch (error) {
+                bridgeTextEl.textContent = "Start failed";
+                renderFeedback(["ကင်မရာ သို့မဟုတ် backend ချိတ်ဆက်မှုကို စစ်ဆေးပါ"]);
+                console.error(error);
+            }
+        }
+
+        async function pauseTracking() {
+            try {
+                await postControl("/pause");
+                isActive = false;
+                setUiState("Paused");
+                bridgeTextEl.textContent = "Tracking paused";
+                networkStateEl.textContent = "IDLE";
+                renderFeedback([]);
+            } catch (error) {
+                bridgeTextEl.textContent = "Pause failed";
+                console.error(error);
+            }
+        }
+
+        async function resumeTracking() {
+            try {
+                await ensureCamera();
+                await postControl("/resume");
+                isActive = true;
+                lock = false;
+                setUiState("Active");
+                bridgeTextEl.textContent = "Tracking resumed";
+                networkStateEl.textContent = "READY";
+                startLoop();
+            } catch (error) {
+                bridgeTextEl.textContent = "Resume failed";
+                renderFeedback(["ကင်မရာ သို့မဟုတ် backend ချိတ်ဆက်မှုကို စစ်ဆေးပါ"]);
+                console.error(error);
+            }
+        }
+
+        startBtn.addEventListener("click", startTracking);
+        pauseBtn.addEventListener("click", pauseTracking);
+        resumeBtn.addEventListener("click", resumeTracking);
+
+        window.addEventListener("load", async () => {
+            setUiState("Paused");
+            renderFeedback([]);
+            try {
+                await ensureCamera();
+                bridgeTextEl.textContent = "Camera ready";
+            } catch (error) {
+                bridgeTextEl.textContent = "Camera permission needed";
+                renderFeedback(["ကင်မရာအသုံးပြုခွင့်ကို ခွင့်ပြုပေးပါ"]);
+                console.error(error);
+            }
+        });
+    </script>
+</body>
+</html>

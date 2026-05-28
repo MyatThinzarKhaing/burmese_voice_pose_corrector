@@ -1,292 +1,329 @@
-import cv2
-import mediapipe as mp
-import numpy as np
-import math
-import time
-import edge_tts
 import asyncio
-import pygame
+import math
 import os
+import queue
+import sys
+import tempfile
+import threading
+import time
+import types
 
-# =========================
-# TEXT TO SPEECH SETUP
-# =========================
-pygame.mixer.init()
-async def speak_async(text):
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
-    filename = "voice.mp3"
+import cv2
+import edge_tts
+import numpy as np
+import pygame
+from flask import Flask, jsonify, render_template, request
+from flask_cors import CORS
+from google.protobuf import descriptor as protobuf_descriptor
+from google.protobuf import message_factory
+from google.protobuf import symbol_database
 
-    communicate = edge_tts.Communicate(
-        text=text,
-        voice="my-MM-NilarNeural"
+if not hasattr(protobuf_descriptor.FieldDescriptor, "label"):
+    protobuf_descriptor.FieldDescriptor.label = property(
+        lambda self: self._label,
+        lambda self, value: setattr(self, "_label", value),
     )
 
-    await communicate.save(filename)
+if not hasattr(message_factory.MessageFactory, "GetPrototype"):
+    message_factory.MessageFactory.GetPrototype = staticmethod(message_factory.GetMessageClass)
 
-    pygame.mixer.music.load(filename)
-    pygame.mixer.music.play()
-
-    # wait until audio finishes
-    while pygame.mixer.music.get_busy():
-        await asyncio.sleep(0.1)
-
-    # stop and unload music
-    pygame.mixer.music.stop()
-    pygame.mixer.music.unload()
-
-    # small delay so Windows releases file
-    await asyncio.sleep(0.2)
-
-    # now remove file safely
-    if os.path.exists(filename):
-        os.remove(filename)
+if not hasattr(symbol_database.SymbolDatabase, "GetPrototype"):
+    symbol_database.SymbolDatabase.GetPrototype = lambda self, descriptor: message_factory.GetMessageClass(descriptor)
 
 
-def speak_burmese(text):
-    asyncio.run(speak_async(text))
+def _doc_control_passthrough(*args, **kwargs):
+    if args and callable(args[0]) and len(args) == 1 and not kwargs:
+        return args[0]
 
-# =========================
-# MEDIAPIPE SETUP
-# =========================
+    def decorator(obj):
+        return obj
+
+    return decorator
+
+
+tensorflow_stub = types.ModuleType("tensorflow")
+tensorflow_tools_stub = types.ModuleType("tensorflow.tools")
+tensorflow_docs_stub = types.ModuleType("tensorflow.tools.docs")
+doc_controls_stub = types.ModuleType("tensorflow.tools.docs.doc_controls")
+doc_controls_stub.do_not_generate_docs = _doc_control_passthrough
+doc_controls_stub.do_not_doc_inheritable = _doc_control_passthrough
+doc_controls_stub.for_subclass_implementers = _doc_control_passthrough
+doc_controls_stub.__getattr__ = lambda name: _doc_control_passthrough
+tensorflow_stub.tools = tensorflow_tools_stub
+tensorflow_tools_stub.docs = tensorflow_docs_stub
+tensorflow_docs_stub.doc_controls = doc_controls_stub
+sys.modules.setdefault("tensorflow", tensorflow_stub)
+sys.modules.setdefault("tensorflow.tools", tensorflow_tools_stub)
+sys.modules.setdefault("tensorflow.tools.docs", tensorflow_docs_stub)
+sys.modules.setdefault("tensorflow.tools.docs.doc_controls", doc_controls_stub)
+
+import mediapipe as mp
+
+
+app = Flask(__name__)
+CORS(app)
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
+
 mp_pose = mp.solutions.pose
-mp_drawing = mp.solutions.drawing_utils
-
 pose = mp_pose.Pose(
     static_image_mode=False,
+    model_complexity=1,
+    smooth_landmarks=True,
+    enable_segmentation=False,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5,
-    model_complexity=1
 )
 
-# =========================
-# GLOBAL VARIABLES
-# =========================
+state_lock = threading.RLock()
+pose_lock = threading.Lock()
+audio_queue = queue.Queue(maxsize=2)
+
 counter = 0
-stage = "up"
-last_spoken_time = 0
+stage = "paused"
+angle = 0
+is_paused = True
+last_spoken_at = {}
 
-# =========================
-# ANGLE CALCULATION
-# =========================
-def calculateAngle(a, b, c):
+BURMESE_VOICE = "my-MM-NilarNeural"
+VOICE_TEXT = {
+    "Good Rep!": "အနေအထား ကောင်းမွန်သည်",
+    "Keep your body straight": "ကိုယ်ကိုတည့်တည့်ထားပါ",
+    "Lower your body": "ပိုနိမ့်ပါ",
+    "Too low": "အရမ်းမနိမ့်ပါနဲ့",
+}
 
+
+def make_payload(feedback=None):
+    with state_lock:
+        return {
+            "counter": int(counter),
+            "angle": int(angle),
+            "stage": stage,
+            "feedback": feedback or [],
+            "paused": bool(is_paused),
+        }
+
+
+def calculate_angle(a, b, c):
     x1, y1 = a[:2]
     x2, y2 = b[:2]
     x3, y3 = c[:2]
-
-    angle = math.degrees(
-        math.atan2(y3 - y2, x3 - x2) -
-        math.atan2(y1 - y2, x1 - x2)
+    raw_angle = math.degrees(
+        math.atan2(y3 - y2, x3 - x2) - math.atan2(y1 - y2, x1 - x2)
     )
 
-    if angle < 0:
-        angle += 360
+    raw_angle = abs(raw_angle)
+    if raw_angle > 180:
+        raw_angle = 360 - raw_angle
 
-    return angle
+    return raw_angle
 
-# =========================
-# POSE DETECTION
-# =========================
-def detectPose(frame):
 
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+def init_audio():
+    try:
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
+        return True
+    except pygame.error as exc:
+        print(f"Audio disabled: {exc}")
+        return False
 
-    results = pose.process(rgb)
 
-    landmarks = []
+AUDIO_READY = init_audio()
 
-    if results.pose_landmarks:
 
-        h, w, _ = frame.shape
+async def speak_async(text):
+    if not AUDIO_READY:
+        return
 
-        mp_drawing.draw_landmarks(
-            frame,
-            results.pose_landmarks,
-            mp_pose.POSE_CONNECTIONS
-        )
+    fd, filename = tempfile.mkstemp(suffix=".mp3")
+    os.close(fd)
 
-        for lm in results.pose_landmarks.landmark:
-            landmarks.append((
-                int(lm.x * w),
-                int(lm.y * h),
-                lm.z
-            ))
+    try:
+        communicate = edge_tts.Communicate(text=text, voice=BURMESE_VOICE)
+        await communicate.save(filename)
+        pygame.mixer.music.load(filename)
+        pygame.mixer.music.play()
 
-    return frame, landmarks
+        while pygame.mixer.music.get_busy():
+            await asyncio.sleep(0.05)
 
-# =========================
-# PUSH-UP DETECTION
-# =========================
-def detect_pushup(landmarks):
+        pygame.mixer.music.stop()
+        pygame.mixer.music.unload()
+        await asyncio.sleep(0.1)
+    except Exception as exc:
+        print(f"TTS skipped: {exc}")
+    finally:
+        try:
+            if os.path.exists(filename):
+                os.remove(filename)
+        except OSError:
+            pass
 
-    global counter, stage, last_spoken_time
+
+def audio_worker():
+    while True:
+        text = audio_queue.get()
+        try:
+            asyncio.run(speak_async(text))
+        finally:
+            audio_queue.task_done()
+
+
+def queue_voice(feedback_key, cooldown=3.0):
+    now = time.time()
+    with state_lock:
+        previous = last_spoken_at.get(feedback_key, 0)
+        if now - previous < cooldown:
+            return
+        last_spoken_at[feedback_key] = now
+
+    try:
+        audio_queue.put_nowait(VOICE_TEXT[feedback_key])
+    except queue.Full:
+        pass
+
+
+def extract_landmarks(results, width, height):
+    if not results.pose_landmarks:
+        return []
+
+    return [
+        (int(landmark.x * width), int(landmark.y * height), landmark.z)
+        for landmark in results.pose_landmarks.landmark
+    ]
+
+
+def evaluate_pushup(landmarks):
+    global angle, counter, stage
 
     feedback = []
+    voice_events = []
 
-    # LEFT SIDE LANDMARKS
     shoulder = landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
     elbow = landmarks[mp_pose.PoseLandmark.LEFT_ELBOW.value]
     wrist = landmarks[mp_pose.PoseLandmark.LEFT_WRIST.value]
     hip = landmarks[mp_pose.PoseLandmark.LEFT_HIP.value]
     ankle = landmarks[mp_pose.PoseLandmark.LEFT_ANKLE.value]
 
-    # ELBOW ANGLE
-    angle = calculateAngle(shoulder, elbow, wrist)
+    current_angle = int(calculate_angle(shoulder, elbow, wrist))
+    body_alignment = abs(((shoulder[1] + ankle[1]) / 2) - hip[1])
 
-    # =========================
-    # PUSH-UP COUNTER
-    # =========================
+    with state_lock:
+        angle = current_angle
 
-    # DOWN POSITION
-    if angle < 100:
-        stage = "down"
+        if current_angle < 95:
+            stage = "down"
 
-    # UP POSITION
-    if angle > 160 and stage == "down":
+        if current_angle > 155 and stage == "down":
+            stage = "up"
+            counter += 1
+            feedback.append("Good Rep!")
+            voice_events.append(("Good Rep!", 1.8))
 
+        if body_alignment > 44:
+            feedback.append("Keep your body straight")
+            voice_events.append(("Keep your body straight", 3.5))
+
+        if current_angle > 168 and stage == "up":
+            feedback.append("Lower your body")
+            voice_events.append(("Lower your body", 3.0))
+        elif current_angle < 55:
+            feedback.append("Too low")
+            voice_events.append(("Too low", 3.0))
+
+        payload = make_payload(feedback)
+
+    for key, cooldown in voice_events:
+        queue_voice(key, cooldown=cooldown)
+
+    return payload
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/start", methods=["POST"])
+def start():
+    global angle, counter, is_paused, stage
+
+    with state_lock:
+        counter = 0
+        angle = 0
         stage = "up"
-        counter += 1
+        is_paused = False
+        last_spoken_at.clear()
 
-        feedback.append("Good Rep!")
+    return jsonify({"status": "started"})
 
-        if time.time() - last_spoken_time > 2:
-            speak_burmese("လုပ်တာကောင်းပါတယ်")
-            last_spoken_time = time.time()
 
-    # =========================
-    # FORM CHECKS
-    # =========================
+@app.route("/pause", methods=["POST"])
+def pause():
+    global is_paused, stage
 
-    # BODY STRAIGHT CHECK
-    shoulder_y = shoulder[1]
-    hip_y = hip[1]
-    ankle_y = ankle[1]
+    with state_lock:
+        is_paused = True
+        stage = "paused"
 
-    body_alignment = abs((shoulder_y + ankle_y) / 2 - hip_y)
+    return jsonify({"status": "paused"})
 
-    if body_alignment > 40:
 
-        feedback.append("Keep your body straight")
-        speak_burmese("ကိုယ်ကိုတည့်တည့်ထားပါ")
+@app.route("/resume", methods=["POST"])
+def resume():
+    global is_paused, stage
 
-        if time.time() - last_spoken_time > 3:
-            speak_burmese("ကိုယ်ကိုတည့်တည့်ထားပါ")
-            last_spoken_time = time.time()
+    with state_lock:
+        is_paused = False
+        if stage == "paused":
+            stage = "up"
 
-    # GO LOWER
-    if angle > 170:
-        feedback.append("Lower your body")
-        speak_burmese("ပိုနိမ့်ပါ")
+    return jsonify({"status": "resumed"})
 
-    # TOO LOW
-    elif angle < 60:
-        speak_burmese("အရမ်းမနိမ့်ပါနဲ့")
 
-    return feedback, angle
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    with state_lock:
+        paused_now = is_paused
 
-# =========================
-# WEBCAM
-# =========================
-cap = cv2.VideoCapture(0)
+    if paused_now:
+        return jsonify(make_payload())
 
-cap.set(3, 1280)
-cap.set(4, 720)
+    uploaded_frame = request.files.get("frame")
+    if uploaded_frame is None:
+        return jsonify({"error": "Missing form-data file field: frame", **make_payload()}), 400
 
-cv2.namedWindow("AI Pushup Trainer", cv2.WINDOW_NORMAL)
+    frame_data = np.frombuffer(uploaded_frame.read(), dtype=np.uint8)
+    frame = cv2.imdecode(frame_data, cv2.IMREAD_COLOR)
 
-# =========================
-# MAIN LOOP
-# =========================
-while cap.isOpened():
+    if frame is None:
+        return jsonify({"error": "Unable to decode image frame", **make_payload()}), 400
 
-    success, frame = cap.read()
-
-    if not success:
-        continue
-
-    # SELFIE VIEW
+    frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_AREA)
     frame = cv2.flip(frame, 1)
+    height, width = frame.shape[:2]
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    rgb_frame.flags.writeable = False
 
-    # RESIZE
-    frame = cv2.resize(frame, (1280, 720))
+    try:
+        with pose_lock:
+            results = pose.process(rgb_frame)
+    except Exception as exc:
+        print(f"MediaPipe processing error: {exc}")
+        return jsonify({"error": "Pose processing failed", **make_payload()}), 500
 
-    # DETECT POSE
-    frame, landmarks = detectPose(frame)
+    landmarks = extract_landmarks(results, width, height)
+    if not landmarks:
+        return jsonify(make_payload())
 
-    # IF LANDMARKS FOUND
-    if landmarks:
+    return jsonify(evaluate_pushup(landmarks))
 
-        feedback, angle = detect_pushup(landmarks)
 
-        # =========================
-        # DISPLAY COUNTER
-        # =========================
-        cv2.putText(
-            frame,
-            f'Push-ups: {counter}',
-            (20, 50),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (0, 255, 0),
-            3
-        )
-
-        # =========================
-        # DISPLAY STAGE
-        # =========================
-        cv2.putText(
-            frame,
-            f'Stage: {stage}',
-            (20, 100),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (255, 255, 0),
-            3
-        )
-
-        # =========================
-        # DISPLAY ANGLE
-        # =========================
-        cv2.putText(
-            frame,
-            f'Angle: {int(angle)}',
-            (20, 150),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (255, 0, 255),
-            3
-        )
-
-        # =========================
-        # DISPLAY FEEDBACK
-        # =========================
-        y = 220
-
-        for msg in feedback:
-
-            cv2.putText(
-                frame,
-                msg,
-                (20, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
-                (0, 0, 255),
-                3
-            )
-
-            y += 50
-
-    # =========================
-    # SHOW WINDOW
-    # =========================
-    cv2.imshow("AI Pushup Trainer", frame)
-
-    # ESC TO EXIT
-    if cv2.waitKey(1) & 0xFF == 27:
-        break
-
-# =========================
-# CLEANUP
-# =========================
-cap.release()
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    threading.Thread(target=audio_worker, daemon=True).start()
+    app.run(host="127.0.0.1", port=5000, debug=True, threaded=True, use_reloader=False)
