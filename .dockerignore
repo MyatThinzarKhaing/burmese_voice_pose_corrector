@@ -1,0 +1,16 @@
+.git
+.idea
+.vscode
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.env
+.venv
+venv
+env
+pip-wheel-metadata
+build
+dist
+*.egg-info
